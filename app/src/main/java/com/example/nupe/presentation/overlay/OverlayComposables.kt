@@ -24,14 +24,17 @@ fun BubbleOverlay(
 ) {
     Surface(
         modifier = Modifier
-            .size(60.dp)
+            .size(72.dp) // Larger size
             .clickable(onClick = onClick),
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.primaryContainer,
-        shadowElevation = 4.dp
+        color = Color.Red, // Red circle
+        shadowElevation = 8.dp
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text("!")
+            Text(
+                text = "!",
+                style = MaterialTheme.typography.headlineLarge.copy(color = Color.White) // White "!"
+            )
         }
     }
 }

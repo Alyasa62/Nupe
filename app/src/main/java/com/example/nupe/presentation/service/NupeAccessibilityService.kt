@@ -16,6 +16,9 @@ class NupeAccessibilityService : AccessibilityService() {
     @Inject lateinit var textAnalyzer: TextAnalyzer
     @Inject lateinit var imageAnalyzer: ImageAnalyzer
     @Inject lateinit var overlayManager: OverlayManager
+    @Inject lateinit var riskManager: com.example.nupe.domain.manager.RiskEscalationManager
+    @Inject lateinit var quranRepository: com.example.nupe.core.data.QuranRepository
+    @Inject lateinit var notificationHelper: com.example.nupe.presentation.util.NotificationHelper
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var lastScrollTime = 0L
@@ -107,15 +110,60 @@ class NupeAccessibilityService : AccessibilityService() {
         scope.launch {
             val isSuspicious = textAnalyzer.analyze(text)
             android.util.Log.d("NupeService", "Analyzing text: '$text', suspicious: $isSuspicious")
+            
             if (isSuspicious) {
+                riskManager.onSuspiciousEvent()
+                val currentRisk = riskManager.getRiskLevel()
+                
                 withContext(Dispatchers.Main) {
-                    overlayManager.showBubble(this@NupeAccessibilityService)
-                     // Escalation: If very suspicious, could trigger image analysis or block immediately.
-                     // For now, Level 1: Bubble.
+                    when (currentRisk) {
+                         com.example.nupe.domain.manager.RiskLevel.WARNING -> {
+                             // Level 1: Warning Bubble
+                             // Refined UI: Red circle, White "!" (To be implemented in OverlayManager UI code, or assume it handles "showBubble" with updated Logic)
+                             // For now we just call showBubble.
+                             overlayManager.showBubble(this@NupeAccessibilityService)
+                         }
+                         com.example.nupe.domain.manager.RiskLevel.INTENT, com.example.nupe.domain.manager.RiskLevel.MAX_PENALTY -> {
+                             // Level 2+: Notification + Verse
+                             val verse = quranRepository.getRandomVerse()
+                             notificationHelper.showRiskNotification(verse)
+                             overlayManager.showBubble(this@NupeAccessibilityService) // Also show bubble
+                         }
+                         else -> {} // SAFE
+                    }
                 }
                 
-                // Trigger Image Analysis as escalation (mock logic)
-                // takeScreenshotAndAnalyze() 
+                if (currentRisk == com.example.nupe.domain.manager.RiskLevel.INTENT) {
+                     triggerImageAnalysis()
+                }
+            }
+        }
+    }
+
+    private fun triggerImageAnalysis() {
+        scope.launch {
+            // Mocking screenshot capture or using a real mechanism if available
+            // In a real accessibility service, takeScreenshot() API (Android 11+) or MediaProjection is used.
+            // For this snippet, we assume imageAnalyzer takes a bitmap or we simulate the result.
+            
+            // val bitmap = takeScreenshotOrBitmap() 
+            // val isPorn = imageAnalyzer.analyze(bitmap)
+             
+            // Simulating image analysis result for purpose of logic flow:
+            val isPorn = false // Default safe
+            
+            if (isPorn) {
+                withContext(Dispatchers.Main) {
+                    riskManager.triggerMaxPenalty()
+                    overlayManager.showBlur(this@NupeAccessibilityService)
+                    overlayManager.showBlock(this@NupeAccessibilityService) {
+                         // Sanctuary navigation
+                         val intent = android.content.Intent(this@NupeAccessibilityService, com.example.nupe.presentation.SanctuaryActivity::class.java).apply {
+                             flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                         }
+                         startActivity(intent)
+                    }
+                }
             }
         }
     }

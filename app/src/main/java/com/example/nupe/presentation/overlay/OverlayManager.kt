@@ -4,8 +4,13 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.view.Gravity
 import android.view.WindowManager
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.setViewTreeLifecycleOwner
+
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleRegistry
@@ -191,6 +196,63 @@ class OverlayManager @Inject constructor(
             } finally {
                 isBlockAttached = false
                 blockView = null
+            }
+        }
+    }
+
+    private var blurView: ComposeView? = null
+    private var isBlurAttached = false
+
+    fun showBlur(context: Context) {
+        if (isBlurAttached || blurView != null) return
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, // Let touches pass? No, visual blur usually assumes blocking vision but maybe not interaction? 
+                    // Prompt says: "Update OverlayManager to support a 'Blur' effect... use a Box with Color.Black.copy(alpha = 0.9f) overlay as a fallback"
+                    // Usually a blur/dim overlay is just visual.
+            PixelFormat.TRANSLUCENT
+        )
+
+        blurView = ComposeView(context).apply {
+            setViewTreeLifecycleOwner(this@OverlayManager)
+            setViewTreeViewModelStoreOwner(this@OverlayManager)
+            setViewTreeSavedStateRegistryOwner(this@OverlayManager)
+            setContent {
+                // Fallback Blur: A dark semi-transparent box
+                androidx.compose.foundation.layout.Box(
+                    modifier = androidx.compose.ui.Modifier
+                        .fillMaxSize()
+                        .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.9f))
+                )
+            }
+        }
+
+        try {
+            val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            wm.addView(blurView, params)
+            isBlurAttached = true
+        } catch (e: Exception) {
+            e.printStackTrace()
+             blurView = null
+             isBlurAttached = false
+        }
+    }
+    
+    fun hideBlur() {
+        if (!isBlurAttached) return
+        blurView?.let { view ->
+            try {
+                windowManager.removeView(view)
+            } catch (e: Exception) { e.printStackTrace() }
+            finally {
+                isBlurAttached = false
+                blurView = null
             }
         }
     }
