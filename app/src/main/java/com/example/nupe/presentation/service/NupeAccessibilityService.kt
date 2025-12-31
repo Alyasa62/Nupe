@@ -109,7 +109,7 @@ class NupeAccessibilityService : AccessibilityService() {
             android.util.Log.d("NupeService", "Analyzing text: '$text', suspicious: $isSuspicious")
             if (isSuspicious) {
                 withContext(Dispatchers.Main) {
-                    overlayManager.showBubble()
+                    overlayManager.showBubble(this@NupeAccessibilityService)
                      // Escalation: If very suspicious, could trigger image analysis or block immediately.
                      // For now, Level 1: Bubble.
                 }
@@ -124,7 +124,7 @@ class NupeAccessibilityService : AccessibilityService() {
     private fun triggerBlock() {
          scope.launch(Dispatchers.Main) {
              performGlobalAction(GLOBAL_ACTION_BACK)
-             overlayManager.showBlock {
+             overlayManager.showBlock(this@NupeAccessibilityService) {
                  // Navigate to Sanctuary
                  val intent = android.content.Intent(this@NupeAccessibilityService, com.example.nupe.presentation.SanctuaryActivity::class.java).apply {
                      flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
