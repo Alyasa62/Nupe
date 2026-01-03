@@ -111,22 +111,11 @@ class OverlayManager @Inject constructor(
         
         bubbleView?.let { view ->
             try {
-                // We need to use the same WindowManager that added it. 
-                // Since we used `context.getSystemService` in showBubble, we should strictly speaking retrieve it again 
-                // OR use the `windowManager` field if we assume it's the same system service instance (which it usually is).
-                // However, `removeView` checks if the view is attached to *that* window manager.
-                // To be safe, we try to use the application context's WM which is what we stored in `windowManager` field,
-                // OR we just assume `windowManager` holds the reference. 
-                // Actually, `windowManager.removeView(view)` works if `windowManager` corresponds to the same display.
-                // For AccessibilityService, `getSystemService` returns a WM tailored for the service's display context.
-                // `applicationContext` might return the default display WM. They should match for the default display.
-                // Let's try the stored `windowManager`.
-                windowManager.removeView(view)
-            } catch (e: IllegalArgumentException) {
-                // "View not attached to window manager"
-                android.util.Log.w("NupeOverlay", "View not attached when trying to remove", e)
+                if (view.parent != null) {
+                    windowManager.removeView(view)
+                }
             } catch (e: Exception) {
-                 e.printStackTrace()
+                 android.util.Log.e("NupeOverlay", "Error removing bubble view", e)
             } finally {
                 isBubbleAttached = false
                 bubbleView = null
@@ -188,11 +177,11 @@ class OverlayManager @Inject constructor(
 
         blockView?.let { view ->
              try {
-                windowManager.removeView(view)
-            } catch (e: IllegalArgumentException) {
-                 android.util.Log.w("NupeOverlay", "View not attached when trying to remove block", e)
+                if (view.parent != null) {
+                    windowManager.removeView(view)
+                }
             } catch (e: Exception) { 
-                e.printStackTrace() 
+                android.util.Log.e("NupeOverlay", "Error removing block view", e)
             } finally {
                 isBlockAttached = false
                 blockView = null

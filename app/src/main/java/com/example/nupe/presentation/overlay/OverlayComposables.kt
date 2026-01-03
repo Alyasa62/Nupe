@@ -45,7 +45,7 @@ fun BlockOverlay(
 ) {
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = Color.Black.copy(alpha = 0.95f)
+        color = Color.White.copy(alpha = 0.92f) // Frost effect
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -55,13 +55,13 @@ fun BlockOverlay(
             Text(
                 text = "Content Blocked",
                 style = MaterialTheme.typography.headlineLarge,
-                color = Color.White
+                color = Color.Black // Dark text against white frost
             )
             Spacer(modifier = Modifier.height(16.dp))
             Text(
                 text = "Take a moment to breathe.",
                 style = MaterialTheme.typography.bodyLarge,
-                color = Color.White.copy(alpha = 0.8f)
+                color = Color.Black.copy(alpha = 0.8f)
             )
             Spacer(modifier = Modifier.height(32.dp))
             

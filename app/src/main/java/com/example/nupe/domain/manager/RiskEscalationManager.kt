@@ -60,5 +60,14 @@ class RiskEscalationManager @Inject constructor() {
         resetDecayTimer()
     }
     
+    fun incrementRisk() = onSuspiciousEvent()
+    fun setMaxRisk() = triggerMaxPenalty()
+    
+    fun resetRisk() {
+        riskScore = 0
+        decayJob?.cancel()
+        android.util.Log.d("NupeRisk", "Risk Score Reset to 0 (Safe Zone)")
+    }
+    
     fun getCurrentScore() = riskScore
 }
