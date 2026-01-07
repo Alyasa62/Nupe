@@ -15,6 +15,7 @@ class NupeAccessibilityService : AccessibilityService() {
 
     @Inject lateinit var textAnalyzer: TextAnalyzer
     @Inject lateinit var imageAnalyzer: ImageAnalyzer
+    @Inject lateinit var ocrAnalyzer: com.example.nupe.core.data.OcrAnalyzer
     @Inject lateinit var overlayManager: OverlayManager
     @Inject lateinit var riskManager: com.example.nupe.domain.manager.RiskEscalationManager
     @Inject lateinit var quranRepository: com.example.nupe.core.data.QuranRepository
@@ -23,22 +24,10 @@ class NupeAccessibilityService : AccessibilityService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var lastScrollTime = 0L
     private var lastSuspiciousTime = 0L // Feature: Sticky Bubble Cool-down
+    private var lastImageScanTime = 0L // Feature: Throttling
     private val scrollDebounceJob: Job? = null
     
-    // Feature: Hybrid Trigger (The Instant Block)
-    private val NUCLEAR_KEYWORDS = listOf("porn", "xxx", "nude", "sex")
-
     // Feature: Safe Zone Detection (Safe Apps)
-    // Feature: Safe Zone Detection (Safe Apps)
-    // Removed class-level list to use local list as requested for specific logic update.
-    // Or we can update this list and reuse.
-    // The prompt explicitly provided logic inside the method.
-    // We will follow the prompt's structure but maybe keep the variable to avoid reallocation?
-    // User requested "Implement a specific handler... Logic: // Inside onAccessibilityEvent... val safeApps = ..."
-    // So I will remove this property and put it inside or just update this property.
-    // Let's keep it clean: Update the property to match the requested list and use it in the logic.
-    // Let's keep it clean: Update the property to match the requested list and use it in the logic.
-    // CRITICAL FIX: Add "com.example.nupe" (or context.packageName) to this list
     private val safeApps = listOf(
         "com.example.nupe",
         "com.miui.home", 
@@ -57,7 +46,6 @@ class NupeAccessibilityService : AccessibilityService() {
 
         // 1. FILTER: Ignore safe apps
         if (CoreConstants.SAFE_PACKAGES.contains(packageName)) {
-            // android.util.Log.v("NupeService", "Ignored safe package: $packageName")
             return
         }
         android.util.Log.d("NupeService", "Processing event from: $packageName, type: ${event.eventType}")
@@ -72,14 +60,12 @@ class NupeAccessibilityService : AccessibilityService() {
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                  // Feature: Forgiveness Logic (Enter Safe Zone)
-                 // Logic: Use contains to match substrings (e.g. "miui.home")
-                 // Add this.packageName just in case it's not "com.example.nupe" (for other flavors/builds)
                  if (packageName == this.packageName || safeApps.any { packageName.contains(it) }) {
                      android.util.Log.d("Nupe", "Entered Safe Zone: $packageName. Resetting.")
                      // 1. Reset Score
                      riskManager.resetRisk()
                      // 2. Remove Overlay (Safely)
-                     overlayManager.hideBlock() // Note: method name in OverlayManager is hideBlock, user called it hideBlocker
+                     overlayManager.hideBlock() 
                      overlayManager.hideBubble()
                      // 3. Stop processing this event
                      return
@@ -123,13 +109,10 @@ class NupeAccessibilityService : AccessibilityService() {
             triggerImageAnalysis()
         }
 
-        // 1. Feature: Full Node Text Scanning (Fix "Disappearing Bubble")
+        // 1. Feature: Full Node Text Scanning
         // MUST grab the Full Node Text
         var extractedText = event.source?.text?.toString() ?: ""
         
-        // Fallback or append event text if node text is empty or distinct?
-        // Prompt says: "MUST grab the Full Node Text: val fullText = event.source?.text ?: "" and scan that."
-        // We will prioritize node text.
         if (extractedText.isBlank()) {
              val eventText = event.text.joinToString(" ")
              val contentDesc = event.contentDescription?.toString() ?: ""
@@ -140,7 +123,7 @@ class NupeAccessibilityService : AccessibilityService() {
              extractedText = extractTextFromNode(event.source)
         }
 
-        android.util.Log.d("NupeService", "Content changed (Final): '$extractedText'")
+        android.util.Log.d("NupeService", "Content changed (Strict Mode): '$extractedText'")
         
         if (extractedText.isNotEmpty()) {
              analyzeText(extractedText)
@@ -169,120 +152,151 @@ class NupeAccessibilityService : AccessibilityService() {
 
     private fun analyzeText(text: String) {
         scope.launch {
+            // 1. Check Keywords (TextAnalyzer checks both BAD and NUCLEAR keywords)
             val isSuspicious = textAnalyzer.analyze(text)
-            android.util.Log.d("NupeService", "Analyzing text: '$text', suspicious: $isSuspicious")
-            
-            // Feature: Hybrid Trigger (The Instant Block)
-            // Do NOT wait for images if the text is explicitly dangerous.
-            val containsNuclearKeyword = NUCLEAR_KEYWORDS.any { text.contains(it, ignoreCase = true) }
-            val persistentBadBehavior = riskManager.getCurrentScore() > 5
-            
-            if (containsNuclearKeyword || persistentBadBehavior) {
-                 withContext(Dispatchers.Main) {
-                     android.util.Log.d("NupeService", "Hybrid Trigger: Nuclear Keyword or High Risk detected. Blocking immediately.")
-                     // Action: Instant Frost
-                     overlayManager.showBlock(this@NupeAccessibilityService) {
-                         // Sanctuary navigation
-                         val intent = android.content.Intent(this@NupeAccessibilityService, com.example.nupe.presentation.SanctuaryActivity::class.java).apply {
-                             flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                         }
-                         startActivity(intent)
-                     }
-                     // Action: Max Risk
-                     riskManager.setMaxRisk()
-                     // Optional: Kill activity (Nuclear Option behavior)
-                     performGlobalAction(GLOBAL_ACTION_BACK)
-                 }
-                 // We can return here or let it continue to show bubble logic if needed, 
-                 // but since we blocked, the bubble logic is redundant.
-                 return@launch
-            }
             
             if (isSuspicious) {
-                // Feature: Sticky Bubble (Set timer)
-                lastSuspiciousTime = System.currentTimeMillis()
-                
-                // Feature: Auto-Dismiss (Fix "Bubble Won't Leave") - Logic New
-                riskManager.incrementRisk()
-                // overlayManager.showBubble() called below based on risk, or force show
-                
-                val currentRisk = riskManager.getRiskLevel()
+                // CHANGED LOG TAG TO VERIFY UPDATE
+                android.util.Log.d("Nupe", "Text Warning (Bubble Only): Suspicious text found.")
                 
                 withContext(Dispatchers.Main) {
-                    when (currentRisk) {
-                         com.example.nupe.domain.manager.RiskLevel.WARNING -> {
-                             // Level 1: Warning Bubble
-                             overlayManager.showBubble(this@NupeAccessibilityService)
-                         }
-                         com.example.nupe.domain.manager.RiskLevel.INTENT, com.example.nupe.domain.manager.RiskLevel.MAX_PENALTY -> {
-                             // Level 2+: Notification + Verse
-                             val verse = quranRepository.getRandomVerse()
-                             notificationHelper.showRiskNotification(verse)
-                             overlayManager.showBubble(this@NupeAccessibilityService) // Also show bubble
-                         }
-                         else -> {} // SAFE
-                    }
-                }
-                
-                if (currentRisk == com.example.nupe.domain.manager.RiskLevel.INTENT) {
-                     triggerImageAnalysis()
+                    // 2. Show Warning (Bubble ONLY)
+                    // RULE: NEVER BLOCK ON TEXT. ONLY SHOW BUBBLE.
+                    overlayManager.showBubble(this@NupeAccessibilityService)
+                    
+                    // 3. Track Risk
+                    riskManager.incrementRisk()
+                    lastSuspiciousTime = System.currentTimeMillis()
+                    
+                    // 4. Trigger the "Eyes" (Check for images now)
+                    // Blocking only happens if this function confirms an image violation.
+                    triggerImageAnalysis() 
                 }
             } else {
-                // Feature: Cool-down Timer (Fix "Disappearing Bubble")
-                // Only hide if safe AND 3 seconds have passed since last suspicious event
-                val timeSinceLastSuspicious = System.currentTimeMillis() - lastSuspiciousTime
-                
-                if (timeSinceLastSuspicious > 3000L) {
-                    // CRITICAL ADDITION: Reset UI if safe
-                    withContext(Dispatchers.Main) {
+                 // Hide bubble if enough time has passed (cleanup logic)
+                 if (System.currentTimeMillis() - lastSuspiciousTime > 3000) {
+                     withContext(Dispatchers.Main) {
                         overlayManager.hideBubble()
-                    }
-                } else {
-                     android.util.Log.d("NupeService", "Keeping bubble visible during cool-down")
-                }
+                     }
+                 }
             }
         }
     }
 
     private fun triggerImageAnalysis() {
+        // Throttling: Max once per 1 second
+        val now = System.currentTimeMillis()
+        if (now - lastImageScanTime < 1000L) {
+             return
+        }
+        lastImageScanTime = now
+
         scope.launch {
             // Fix: Image Analyzer Logging
             android.util.Log.d("Nupe", "Attempting Screenshot...")
-            
-            // Mocking screenshot capture or using a real mechanism if available
-            // In a real accessibility service, takeScreenshot() API (Android 11+) or MediaProjection is used.
-            // For this snippet, we assume imageAnalyzer takes a bitmap or we simulate the result.
-            
-            // val bitmap = takeScreenshotOrBitmap() 
-            // val isPorn = imageAnalyzer.analyze(bitmap)
-             
-            // Simulating image analysis result for purpose of logic flow:
-            // Feature: The "Nuclear Option" (Fix "Blur Not Showing")
-            // Simulating image analysis result for purpose of logic flow:
-            val isPorn = false // Default safe (You would replace this with actual analysis result)
-            
-            if (isPorn) {
-                withContext(Dispatchers.Main) {
-                    // Call 1: Immediate Visual Block
-                    overlayManager.showBlock(this@NupeAccessibilityService) {
-                         // Sanctuary navigation
-                         val intent = android.content.Intent(this@NupeAccessibilityService, com.example.nupe.presentation.SanctuaryActivity::class.java).apply {
-                             flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                         }
-                         startActivity(intent)
+
+            // 1. Capture Bitmap (Android 11+ API) with Callback
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                takeScreenshot(
+                    android.view.Display.DEFAULT_DISPLAY,
+                    this@NupeAccessibilityService.mainExecutor,
+                    object : AccessibilityService.TakeScreenshotCallback {
+                        override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
+                            val bitmap = try {
+                                val hardwareBitmap = screenshot.hardwareBuffer.let { 
+                                    android.graphics.Bitmap.wrapHardwareBuffer(it, screenshot.colorSpace) 
+                                }
+                                // Copy to software bitmap for TFLite processing (Hardware bitmaps are often immutable/gpu-only)
+                                hardwareBitmap?.copy(android.graphics.Bitmap.Config.ARGB_8888, false).also {
+                                    hardwareBitmap?.recycle()
+                                    screenshot.hardwareBuffer.close()
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("Nupe", "Bitmap conversion failed", e)
+                                null
+                            }
+
+                            if (bitmap != null) {
+                                processBitmap(bitmap)
+                            } else {
+                                handleScreenshotFailure(-1)
+                            }
+                        }
+
+                        override fun onFailure(errorCode: Int) {
+                            android.util.Log.e("Nupe", "Screenshot failed with error code: $errorCode")
+                            handleScreenshotFailure(errorCode)
+                        }
                     }
-                    
-                    // Call 2: Kill the activity
-                    performGlobalAction(GLOBAL_ACTION_BACK)
-                    
-                    // Call 3: Trigger notification/reset timer
-                    riskManager.setMaxRisk()
-                }
+                )
+            } else {
+                android.util.Log.e("Nupe", "Screenshot not supported on this Android version")
             }
         }
     }
 
+    private fun handleScreenshotFailure(errorCode: Int) {
+        // Feature: "Blind Block" Removed -> Notification Only
+        // Logic: "Ensure that a high RiskScore triggers a System Notification but does NOT trigger the Blocker."
+        val currentRisk = riskManager.getCurrentScore()
+        if (currentRisk > 20) {
+            android.util.Log.w("Nupe", "Screenshot failed ($errorCode) and Risk is High ($currentRisk). Sending Repentance Notification.")
+            
+            // Show Repentance Reminder (Notification)
+            val verse = quranRepository.getRandomVerse()
+            notificationHelper.showRiskNotification(verse)
+            
+            // CRITICAL: Do NOT call triggerBlock() here. 
+            // Blocking is exclusive to confirmed visual evidence.
+        }
+    }
+
+    private fun processBitmap(bitmap: android.graphics.Bitmap) {
+        scope.launch {
+            // 2. Parallel Analysis (OCR + Visual)
+            // Use async to run them concurrently on the background thread
+            val ocrDeferred = async { 
+                try {
+                    ocrAnalyzer.analyze(bitmap) 
+                } catch(e: Exception) { 
+                    false 
+                }
+            }
+            
+            val visualDeferred = async {
+                try {
+                    val score = imageAnalyzer.analyzeImage(bitmap)
+                    score > 0.5f // Threshold for porn (0.0 - 1.0)
+                } catch(e: Exception) {
+                    false
+                }
+            }
+
+            // 3. Smart Short-circuit & Split Logic
+            val isTextPorn = ocrDeferred.await()
+            val isVisualPorn = visualDeferred.await()
+
+            if (isVisualPorn) {
+                // CRITICAL: Only Visual Nudity triggers the Nuclear Option (Block)
+                android.util.Log.d("Nupe", "Visual Porn Detected! Blocking.")
+                triggerBlock()
+            } else if (isTextPorn) {
+                // OCR text is treated just like typed text -> Warning only
+                // This prevents the "Typing 'porn' leads to Block" bug
+                android.util.Log.d("Nupe", "OCR found bad text. Showing Warning.")
+                withContext(Dispatchers.Main) {
+                     overlayManager.showBubble(this@NupeAccessibilityService)
+                     riskManager.incrementRisk()
+                }
+                // DO NOT call triggerBlock() here.
+            }
+            
+            bitmap.recycle()
+        }
+    }
+
     // Example escalation method
+    // The ONLY method authorized to block the screen.
     private fun triggerBlock() {
          scope.launch(Dispatchers.Main) {
              performGlobalAction(GLOBAL_ACTION_BACK)

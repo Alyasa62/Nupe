@@ -15,6 +15,11 @@ class TextAnalyzer @Inject constructor() {
                 return true
             }
         }
+        for (keyword in CoreConstants.NUCLEAR_KEYWORDS) {
+            if (lowerText.contains(keyword)) {
+                return true
+            }
+        }
         return false
     }
 }

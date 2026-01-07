@@ -75,4 +75,10 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+
+    // ML Kit Text Recognition (Bundled)
+    implementation("com.google.mlkit:text-recognition:16.0.0")
+    
+    // Play Services Coroutines (for .await() on Tasks)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
 }

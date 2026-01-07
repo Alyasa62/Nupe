@@ -20,4 +20,11 @@ object CoreConstants {
     val BAD_KEYWORDS = setOf(
         "nsfw", "porn", "xxx", "explicit", "adult"
     )
+
+    val NUCLEAR_KEYWORDS = listOf(
+        // English
+        "porn", "xxx", "nude", "sex", "hentai", "boobs", "dick", "pussy", "milf",
+        // Roman Urdu
+        "nanga", "nangi", "gandi video", "sexy", "bhabi", "chudai", "lund", "phudi", "kuti", "randi"
+    )
 }
