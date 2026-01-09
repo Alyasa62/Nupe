@@ -6,9 +6,12 @@ import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.setViewTreeLifecycleOwner
 
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
@@ -29,20 +32,20 @@ class OverlayManager @Inject constructor(
     @ApplicationContext private val applicationContext: Context
 ) : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
 
-    // We still keep a reference to a WindowManager, but we prefer using the Service's WM if possible.
-    // However, getting WM from applicationContext is usually fine IF we use the correct context for the View.
-    // To be perfectly safe and follow the plan, we will get WM from the passed context in show methods,
-    // or arguably we can keep a default one. 
-    // The Diagnosis says: "The app is trying to add... using an invalid Window Token... or is using an Activity Context instead of the Service Context."
-    // It implies the Context used to create the VIEW is important.
-    
-    private val windowManager = applicationContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    // CRITICAL FIX: Store WindowManager references per view to ensure consistency
     private var bubbleView: ComposeView? = null
     private var blockView: ComposeView? = null
+    private var blurView: ComposeView? = null
+
+    // CRITICAL FIX: Store the WindowManager instance used to add each view
+    private var bubbleWindowManager: WindowManager? = null
+    private var blockWindowManager: WindowManager? = null
+    private var blurWindowManager: WindowManager? = null
 
     // Safety flags
     private var isBubbleAttached = false
     private var isBlockAttached = false
+    private var isBlurAttached = false
 
     // Lifecycle/SavedState boilerplate for Compose in WindowManager
     private val _lifecycleRegistry = LifecycleRegistry(this)
@@ -65,20 +68,21 @@ class OverlayManager @Inject constructor(
     fun showBubble(context: Context) {
         if (isBubbleAttached || bubbleView != null) return // Already showing
 
-        // CRITICAL FIX: Use TYPE_APPLICATION_OVERLAY for Android 8.0+
+        // CRITICAL FIX: Use specific pixel values instead of WRAP_CONTENT
+        // ComposeView defaults to size 0 without explicit measurement
+        val bubbleSize = 200 // 200px to fit 72dp bubble (roughly 72dp * 2.75 density)
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            bubbleSize, // Fixed width in pixels
+            bubbleSize, // Fixed height in pixels
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            // Flags: Don't take focus (let user type), Allow drawing outside screen, watch outside touches
-            // Update: FLAG_NOT_TOUCHABLE to make it non-blocking (click through)
+            // Flags: Don't take focus, allow outside touches, layout in screen
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.CENTER_VERTICAL or Gravity.END
+            gravity = Gravity.TOP or Gravity.END
+            alpha = 1.0f // Ensure full opacity
         }
 
         // Fix: Use the Service Context to create the view
@@ -86,16 +90,26 @@ class OverlayManager @Inject constructor(
             setViewTreeLifecycleOwner(this@OverlayManager)
             setViewTreeViewModelStoreOwner(this@OverlayManager)
             setViewTreeSavedStateRegistryOwner(this@OverlayManager)
+            // CRITICAL FIX: Explicitly set visibility
+            visibility = android.view.View.VISIBLE
             setContent {
-                BubbleOverlay(onClick = { /* Expand to settings or dismiss */ })
+                // Wrap in Box with explicit size to ensure rendering
+                androidx.compose.foundation.layout.Box(
+                    modifier = androidx.compose.ui.Modifier
+                        .size(72.dp)
+                        .background(androidx.compose.ui.graphics.Color.Transparent),
+                    contentAlignment = androidx.compose.ui.Alignment.Center
+                ) {
+                    BubbleOverlay(onClick = { /* Expand to settings or dismiss */ })
+                }
             }
         }
 
         try {
             android.util.Log.d("NupeOverlay", "Attempting to add bubble view to WindowManager")
-            // Use the WindowManager from the context (Service) if possible, or the system one.
-            // Usually context.getSystemService(Context.WINDOW_SERVICE) from Service is best.
+            // CRITICAL FIX: Store the WindowManager instance for consistent removal
             val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            bubbleWindowManager = wm
             wm.addView(bubbleView, params)
             isBubbleAttached = true
             android.util.Log.d("NupeOverlay", "Bubble view added successfully")
@@ -104,23 +118,26 @@ class OverlayManager @Inject constructor(
             e.printStackTrace()
             // Clean up if add failed
             bubbleView = null
+            bubbleWindowManager = null
             isBubbleAttached = false
         }
     }
 
     fun hideBubble() {
         if (!isBubbleAttached) return
-        
+
         bubbleView?.let { view ->
             try {
                 if (view.parent != null) {
-                    windowManager.removeView(view)
+                    // CRITICAL FIX: Use the same WindowManager instance that added the view
+                    bubbleWindowManager?.removeView(view)
                 }
             } catch (e: Exception) {
                  android.util.Log.e("NupeOverlay", "Error removing bubble view", e)
             } finally {
                 isBubbleAttached = false
                 bubbleView = null
+                bubbleWindowManager = null
             }
         }
     }
@@ -136,16 +153,16 @@ class OverlayManager @Inject constructor(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            // Flags: Layout in screen to cover everything. 
+            // Flags: Layout in screen to cover everything.
             // We DO want to block touches, so we DON'T set FLAG_NOT_TOUCHABLE.
-            // We might want FLAG_NOT_FOCUSABLE if we don't need keyboard input, 
+            // We might want FLAG_NOT_FOCUSABLE if we don't need keyboard input,
             // but for a blocker, usually we might want to catch everything.
             // The prompt said: "Don't take focus (let user type)" was for Bubble.
             // For Blocker: "Or MATCH_PARENT for blocker".
             // Let's stick to the prompt's suggested flags, ensuring we cover the screen.
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or 
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, // Let system keys work? or block everything? 
-            // If we want to strictly BLOCK, we usually don't want NOT_FOCUSABLE. 
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, // Let system keys work? or block everything?
+            // If we want to strictly BLOCK, we usually don't want NOT_FOCUSABLE.
             // But let's follow the "Crash 1" fix which implies using the correct TYPE and flags.
             // The user prompt said: "Fix the Window Layout Params: Ensure... configured exactly like this... FLAG_LAYOUT_IN_SCREEN..."
             PixelFormat.TRANSLUCENT
@@ -164,12 +181,15 @@ class OverlayManager @Inject constructor(
         }
 
         try {
+            // CRITICAL FIX: Store the WindowManager instance for consistent removal
             val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            blockWindowManager = wm
             wm.addView(blockView, params)
             isBlockAttached = true
         } catch (e: Exception) {
              e.printStackTrace()
              blockView = null
+             blockWindowManager = null
              isBlockAttached = false
         }
     }
@@ -180,19 +200,18 @@ class OverlayManager @Inject constructor(
         blockView?.let { view ->
              try {
                 if (view.parent != null) {
-                    windowManager.removeView(view)
+                    // CRITICAL FIX: Use the same WindowManager instance that added the view
+                    blockWindowManager?.removeView(view)
                 }
-            } catch (e: Exception) { 
+            } catch (e: Exception) {
                 android.util.Log.e("NupeOverlay", "Error removing block view", e)
             } finally {
                 isBlockAttached = false
                 blockView = null
+                blockWindowManager = null
             }
         }
     }
-
-    private var blurView: ComposeView? = null
-    private var isBlurAttached = false
 
     fun showBlur(context: Context) {
         if (isBlurAttached || blurView != null) return
@@ -204,7 +223,7 @@ class OverlayManager @Inject constructor(
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, // Let touches pass? No, visual blur usually assumes blocking vision but maybe not interaction? 
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, // Let touches pass? No, visual blur usually assumes blocking vision but maybe not interaction?
                     // Prompt says: "Update OverlayManager to support a 'Blur' effect... use a Box with Color.Black.copy(alpha = 0.9f) overlay as a fallback"
                     // Usually a blur/dim overlay is just visual.
             PixelFormat.TRANSLUCENT
@@ -225,25 +244,30 @@ class OverlayManager @Inject constructor(
         }
 
         try {
+            // CRITICAL FIX: Store the WindowManager instance for consistent removal
             val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            blurWindowManager = wm
             wm.addView(blurView, params)
             isBlurAttached = true
         } catch (e: Exception) {
             e.printStackTrace()
              blurView = null
+             blurWindowManager = null
              isBlurAttached = false
         }
     }
-    
+
     fun hideBlur() {
         if (!isBlurAttached) return
         blurView?.let { view ->
             try {
-                windowManager.removeView(view)
+                // CRITICAL FIX: Use the same WindowManager instance that added the view
+                blurWindowManager?.removeView(view)
             } catch (e: Exception) { e.printStackTrace() }
             finally {
                 isBlurAttached = false
                 blurView = null
+                blurWindowManager = null
             }
         }
     }

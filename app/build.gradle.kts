@@ -8,12 +8,12 @@ plugins {
 
 android {
     namespace = "com.example.nupe"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.nupe"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
 
@@ -67,6 +67,7 @@ dependencies {
     implementation(libs.tensorflow.lite)
     implementation(libs.tensorflow.lite.support)
     implementation(libs.tensorflow.lite.gpu)
+    implementation(libs.tensorflow.lite.gpu.delegate.plugin)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

@@ -14,8 +14,8 @@ object CoreConstants {
     )
 
     const val SCROLL_DEBOUNCE_MS = 500L
-    const val MODEL_FILENAME = "mobilenet_v1_1.0_224_quant.tflite" // Placeholder name
-    const val LABEL_FILENAME = "labels.txt" // Placeholder
+    const val MODEL_FILENAME = "nsfw_model.tflite"
+    const val LABEL_FILENAME = "labels.txt"
     
     val BAD_KEYWORDS = setOf(
         "nsfw", "porn", "xxx", "explicit", "adult"

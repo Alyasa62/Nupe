@@ -21,6 +21,7 @@ class NotificationHelper @Inject constructor(
         const val CHANNEL_ID = "nupe_risk_channel"
         const val CHANNEL_NAME = "Nupe Alerts"
         const val NOTIFICATION_ID = 101
+        const val SUGGESTIVE_NOTIFICATION_ID = 999 // OBJECTIVE 3: ID for softcore notifications
     }
 
     init {
@@ -52,5 +53,20 @@ class NotificationHelper @Inject constructor(
             .build()
 
         notificationManager.notify(NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * OBJECTIVE 3: Show notification for softcore/suggestive content (bikini, sexy but not explicit)
+     */
+    fun showSuggestiveContentNotification() {
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("Suggestive Content Detected")
+            .setContentText("Be mindful of what you view. Lower your gaze.")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .build()
+
+        notificationManager.notify(SUGGESTIVE_NOTIFICATION_ID, notification)
     }
 }

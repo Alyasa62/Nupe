@@ -7,6 +7,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.gpu.CompatibilityList
+import org.tensorflow.lite.gpu.GpuDelegate
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -14,6 +16,15 @@ import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * OBJECTIVE 3: Result data class for soft porn logic
+ */
+data class AnalysisResult(
+    val isHardcore: Boolean,
+    val isSoftcore: Boolean,
+    val score: Float = 0f
+)
 
 @Singleton
 class ImageAnalyzer @Inject constructor(
@@ -23,7 +34,8 @@ class ImageAnalyzer @Inject constructor(
     private var interpreter: Interpreter? = null
     private val inputImageWidth = 224
     private val inputImageHeight = 224
-    private val modelInputSize = inputImageWidth * inputImageHeight * 3 // 3 channels (RGB)
+    // Float32 requires 4 bytes per channel
+    private val modelInputSize = inputImageWidth * inputImageHeight * 3 * 4 
 
     init {
         initializeInterpreter()
@@ -32,14 +44,49 @@ class ImageAnalyzer @Inject constructor(
     private fun initializeInterpreter() {
         try {
             val modelBuffer = loadModelFile(CoreConstants.MODEL_FILENAME)
-            
-            // FIX: Use CPU Options (Safe for low-end devices)
+
+            // CRITICAL PERFORMANCE FIX: Try hardware acceleration first, fallback to CPU
             val options = Interpreter.Options().apply {
-                setNumThreads(4) // Parallel processing on CPU
+                setNumThreads(4) // Use 4 threads for CPU fallback
+
+                // Try GPU delegate first (most compatible with float models)
+                var hardwareAccelEnabled = false
+
+                // CRITICAL FIX: Check device compatibility before using GPU delegate
+                val compatibilityList = CompatibilityList()
+                if (compatibilityList.isDelegateSupportedOnThisDevice) {
+                    try {
+                        // Use default GPU delegate options for maximum compatibility
+                        val gpuDelegate = GpuDelegate()
+                        addDelegate(gpuDelegate)
+                        android.util.Log.d("Nupe", "GPU delegate enabled for hardware acceleration")
+                        hardwareAccelEnabled = true
+                    } catch (e: Exception) {
+                        android.util.Log.w("Nupe", "GPU delegate initialization failed: ${e.message}")
+                    }
+                } else {
+                    android.util.Log.d("Nupe", "GPU delegate not supported on this device")
+                }
+
+                // If GPU failed, try NNAPI (Neural Network API) delegate
+                if (!hardwareAccelEnabled) {
+                    try {
+                        val nnApiDelegate = org.tensorflow.lite.nnapi.NnApiDelegate()
+                        addDelegate(nnApiDelegate)
+                        android.util.Log.d("Nupe", "NNAPI delegate enabled for hardware acceleration")
+                        hardwareAccelEnabled = true
+                    } catch (e: Exception) {
+                        android.util.Log.w("Nupe", "NNAPI delegate not available: ${e.message}")
+                    }
+                }
+
+                if (!hardwareAccelEnabled) {
+                    android.util.Log.w("Nupe", "No hardware acceleration available, using CPU with 4 threads")
+                }
             }
-            
+
             interpreter = Interpreter(modelBuffer, options)
-            android.util.Log.d("Nupe", "AI Model loaded successfully (CPU Mode)")
+            android.util.Log.d("Nupe", "NSFW Float32 Model loaded successfully.")
         } catch (e: Exception) {
             android.util.Log.e("Nupe", "CRITICAL: AI Model failed to load. Image detection disabled.", e)
              interpreter = null
@@ -59,44 +106,59 @@ class ImageAnalyzer @Inject constructor(
         }
     }
 
-    suspend fun analyzeImage(bitmap: Bitmap): Float = withContext(Dispatchers.Default) {
-        if (interpreter == null) return@withContext 0f // Model not loaded
+    /**
+     * OBJECTIVE 3: Updated to return AnalysisResult with hardcore and softcore detection
+     */
+    suspend fun analyze(bitmap: Bitmap): AnalysisResult = withContext(Dispatchers.Default) {
+        if (interpreter == null) return@withContext AnalysisResult(false, false, 0f)
 
         val resizedBitmap = Bitmap.createScaledBitmap(bitmap, inputImageWidth, inputImageHeight, true)
         val inputBuffer = convertBitmapToByteBuffer(resizedBitmap)
-        
-        // Output buffer: MobileNet usually outputs probabilities for classes. 
-        // Assuming binary classification (Safe vs NSFW) or multi-class.
-        // For this example, let's assume index 1 is "NSFW".
-        // Float output 1x2 or 1x1001 depending on model.
-        // Quantized models output Bytes (0-255) if strictly quantized output, 
-        // but often inputs are float/int and outputs are float/byte.
-        // User requested Quantized (int8) model.
-        
-        // Let's assume output is a Byte buffer [1][Classes]
-        // or for simplicity, we mock the inference if we don't know the exact output shape.
-        
-        val outputBuffer = Array(1) { ByteArray(2) } // Example: [Safe, Unsafe]
-        
+
+        // Output: [1, 5] Probabilities
+        // 0=Drawing, 1=Hentai, 2=Neutral, 3=Porn, 4=Sexy
+        val outputBuffer = Array(1) { FloatArray(5) }
+
         try {
             interpreter?.run(inputBuffer, outputBuffer)
         } catch (e: Exception) {
             e.printStackTrace()
-            return@withContext 0f
+            return@withContext AnalysisResult(false, false, 0f)
         } finally {
              resizedBitmap.recycle()
-             // Original bitmap recycling is caller's responsibility usually, 
-             // but user asked for "disposing of bitmaps immediately".
-             // We disposed the resized one. The input 'bitmap' should be recycled by caller.
         }
 
-        // Parse output
-        val unsafeScore = (outputBuffer[0][1].toInt() and 0xFF) / 255.0f
-        return@withContext unsafeScore
+        // Scoring Logic
+        val hentaiScore = outputBuffer[0][1]
+        val pornScore = outputBuffer[0][3]
+        val sexyScore = outputBuffer[0][4]
+
+        val totalExplicitScore = hentaiScore + pornScore
+
+        // OBJECTIVE 3: Hardcore vs Softcore logic
+        val isHardcore = totalExplicitScore > 0.70f
+        val isSoftcore = (sexyScore > 0.80f) && !isHardcore
+
+        android.util.Log.d("Nupe", "Scores - Hentai: $hentaiScore, Porn: $pornScore, Sexy: $sexyScore, Hardcore: $isHardcore, Softcore: $isSoftcore")
+
+        return@withContext AnalysisResult(
+            isHardcore = isHardcore,
+            isSoftcore = isSoftcore,
+            score = if (isHardcore) totalExplicitScore else sexyScore
+        )
+    }
+
+    /**
+     * Legacy method for backward compatibility - returns simple float score
+     */
+    @Deprecated("Use analyze() instead for better detection")
+    suspend fun analyzeImage(bitmap: Bitmap): Float {
+        val result = analyze(bitmap)
+        return if (result.isHardcore) result.score else 0f
     }
 
     private fun convertBitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
-        val byteBuffer = ByteBuffer.allocateDirect(modelInputSize) // 1 byte per channel per pixel for Quantized
+        val byteBuffer = ByteBuffer.allocateDirect(modelInputSize)
         byteBuffer.order(ByteOrder.nativeOrder())
 
         val intValues = IntArray(inputImageWidth * inputImageHeight)
@@ -107,10 +169,10 @@ class ImageAnalyzer @Inject constructor(
             for (j in 0 until inputImageHeight) {
                 val value = intValues[pixel++]
 
-                // Quantized model expects [0, 255] byte values
-                byteBuffer.put(((value shr 16) and 0xFF).toByte()) // R
-                byteBuffer.put(((value shr 8) and 0xFF).toByte())  // G
-                byteBuffer.put((value and 0xFF).toByte())         // B
+                // Normalization: 0..255 -> 0.0..1.0
+                byteBuffer.putFloat(((value shr 16) and 0xFF) / 255.0f) // R
+                byteBuffer.putFloat(((value shr 8) and 0xFF) / 255.0f)  // G
+                byteBuffer.putFloat((value and 0xFF) / 255.0f)         // B
             }
         }
         return byteBuffer

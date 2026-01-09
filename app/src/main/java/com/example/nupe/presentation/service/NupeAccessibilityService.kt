@@ -21,11 +21,15 @@ class NupeAccessibilityService : AccessibilityService() {
     @Inject lateinit var quranRepository: com.example.nupe.core.data.QuranRepository
     @Inject lateinit var notificationHelper: com.example.nupe.presentation.util.NotificationHelper
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // CRITICAL FIX: Use managed Job for proper lifecycle control
+    private val serviceJob = SupervisorJob()
+    private val scope = CoroutineScope(serviceJob + Dispatchers.Default)
     private var lastScrollTime = 0L
     private var lastSuspiciousTime = 0L // Feature: Sticky Bubble Cool-down
     private var lastImageScanTime = 0L // Feature: Throttling
-    private val scrollDebounceJob: Job? = null
+
+    // CRITICAL PERFORMANCE FIX: Prevent concurrent analysis to avoid UI freeze
+    private var isAnalyzing = false
     
     // Feature: Safe Zone Detection (Safe Apps)
     private val safeApps = listOf(
@@ -41,6 +45,9 @@ class NupeAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+
+        // HEARTBEAT: Log every event received
+        android.util.Log.v("Nupe", "Event received: ${event.eventType}")
 
         val packageName = event.packageName?.toString() ?: return
 
@@ -82,18 +89,16 @@ class NupeAccessibilityService : AccessibilityService() {
     private fun handleScrollEvent() {
         lastScrollTime = System.currentTimeMillis()
         overlayManager.hideBubble() // Hide bubble on scroll
-        
-        // Feature: Aggressive Image Scanning
-        // If Red Bubble is active (risk > 0), check images on every scroll
-        if (riskManager.getCurrentScore() > 0) {
-            triggerImageAnalysis()
-        }
+
+        // CRITICAL FIX: Always trigger image analysis on scroll
+        // This ensures we detect images even without text triggers first
+        triggerImageAnalysis()
     }
 
     private fun handleContentChange(event: AccessibilityEvent) {
         val packageName = event.packageName?.toString() ?: ""
         val isKeyboard = packageName.contains("inputmethod") || packageName.contains("keyboard")
-        
+
         // Skip debounce checks for keyboard events or explicit text changes
         val isTyping = event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED ||
                        event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
@@ -104,49 +109,69 @@ class NupeAccessibilityService : AccessibilityService() {
             return
         }
 
-        // Feature: Aggressive Image Scanning
-        if (riskManager.getCurrentScore() > 0) {
-            triggerImageAnalysis()
-        }
+        // CRITICAL FIX: Always trigger image analysis on content change
+        // This ensures we detect images proactively
+        triggerImageAnalysis()
 
         // 1. Feature: Full Node Text Scanning
         // MUST grab the Full Node Text
-        var extractedText = event.source?.text?.toString() ?: ""
-        
+        val rootNode = event.source
+        var extractedText = rootNode?.text?.toString() ?: ""
+
         if (extractedText.isBlank()) {
              val eventText = event.text.joinToString(" ")
              val contentDesc = event.contentDescription?.toString() ?: ""
              extractedText = "$eventText $contentDesc".trim()
         }
-        
+
         if (extractedText.isEmpty() || extractedText.isBlank()) {
-             extractedText = extractTextFromNode(event.source)
+             extractedText = extractTextFromNode(rootNode, depth = 0, maxDepth = 4)
         }
 
+        // CRITICAL FIX: Recycle the root node to prevent memory leak
+        rootNode?.recycle()
+
         android.util.Log.d("NupeService", "Content changed (Strict Mode): '$extractedText'")
-        
+
         if (extractedText.isNotEmpty()) {
              analyzeText(extractedText)
         }
     }
 
-    private fun extractTextFromNode(node: android.view.accessibility.AccessibilityNodeInfo?): String {
+    private fun extractTextFromNode(
+        node: android.view.accessibility.AccessibilityNodeInfo?,
+        depth: Int = 0,
+        maxDepth: Int = 4
+    ): String {
         if (node == null) return ""
-        
+
+        // CRITICAL FIX: Add depth limit to prevent ANR on deep UI hierarchies
+        if (depth >= maxDepth) {
+            return ""
+        }
+
         val text = node.text?.toString()
         val desc = node.contentDescription?.toString()
-        
+
         val sb = StringBuilder()
         if (!text.isNullOrBlank()) sb.append(text).append(" ")
         if (!desc.isNullOrBlank()) sb.append(desc).append(" ")
-        
-        // Recursively check children
+
+        // CRITICAL FIX: Early termination if we have enough text (1000 chars)
+        if (sb.length > 1000) {
+            return sb.toString().trim()
+        }
+
+        // Recursively check children with depth tracking
         for (i in 0 until node.childCount) {
              val child = node.getChild(i)
-             sb.append(extractTextFromNode(child)).append(" ")
+             sb.append(extractTextFromNode(child, depth + 1, maxDepth)).append(" ")
              child?.recycle() // Important to recycle!
+
+             // Early exit if we have enough text
+             if (sb.length > 1000) break
         }
-        
+
         return sb.toString().trim()
     }
 
@@ -184,54 +209,71 @@ class NupeAccessibilityService : AccessibilityService() {
     }
 
     private fun triggerImageAnalysis() {
+        // HEARTBEAT: Log image analysis trigger
+        android.util.Log.d("Nupe", "Triggering Image Analysis...")
+
+        // CRITICAL PERFORMANCE FIX: Drop frame if already analyzing
+        if (isAnalyzing) {
+            android.util.Log.d("Nupe", "Analysis already in progress, dropping frame")
+            return
+        }
+
         // Throttling: Max once per 1 second
         val now = System.currentTimeMillis()
         if (now - lastImageScanTime < 1000L) {
-             return
+            android.util.Log.d("Nupe", "Skipping analysis due to throttling (1s cooldown)")
+            return
         }
         lastImageScanTime = now
 
-        scope.launch {
-            // Fix: Image Analyzer Logging
-            android.util.Log.d("Nupe", "Attempting Screenshot...")
+        // Fix: Image Analyzer Logging
+        android.util.Log.d("Nupe", "Attempting Screenshot...")
 
-            // 1. Capture Bitmap (Android 11+ API) with Callback
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                takeScreenshot(
-                    android.view.Display.DEFAULT_DISPLAY,
-                    this@NupeAccessibilityService.mainExecutor,
-                    object : AccessibilityService.TakeScreenshotCallback {
-                        override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
-                            val bitmap = try {
-                                val hardwareBitmap = screenshot.hardwareBuffer.let { 
-                                    android.graphics.Bitmap.wrapHardwareBuffer(it, screenshot.colorSpace) 
-                                }
-                                // Copy to software bitmap for TFLite processing (Hardware bitmaps are often immutable/gpu-only)
-                                hardwareBitmap?.copy(android.graphics.Bitmap.Config.ARGB_8888, false).also {
-                                    hardwareBitmap?.recycle()
-                                    screenshot.hardwareBuffer.close()
-                                }
-                            } catch (e: Exception) {
-                                android.util.Log.e("Nupe", "Bitmap conversion failed", e)
-                                null
-                            }
+        // 1. Capture Bitmap (Android 11+ API) with Callback
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            // CRITICAL FIX: Use background executor to avoid blocking Main thread
+            val backgroundExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
-                            if (bitmap != null) {
-                                processBitmap(bitmap)
-                            } else {
-                                handleScreenshotFailure(-1)
+            takeScreenshot(
+                android.view.Display.DEFAULT_DISPLAY,
+                backgroundExecutor,
+                object : AccessibilityService.TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
+                        // This callback now runs on background thread
+                        val bitmap = try {
+                            val hardwareBitmap = screenshot.hardwareBuffer.let {
+                                android.graphics.Bitmap.wrapHardwareBuffer(it, screenshot.colorSpace)
                             }
+                            // Copy to software bitmap for TFLite processing (Hardware bitmaps are often immutable/gpu-only)
+                            // CRITICAL FIX: This expensive operation now runs on background thread
+                            hardwareBitmap?.copy(android.graphics.Bitmap.Config.ARGB_8888, false).also {
+                                hardwareBitmap?.recycle()
+                                screenshot.hardwareBuffer.close()
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("Nupe", "Bitmap conversion failed", e)
+                            null
                         }
 
-                        override fun onFailure(errorCode: Int) {
-                            android.util.Log.e("Nupe", "Screenshot failed with error code: $errorCode")
-                            handleScreenshotFailure(errorCode)
+                        // Shutdown the executor after use
+                        backgroundExecutor.shutdown()
+
+                        if (bitmap != null) {
+                            processBitmap(bitmap)
+                        } else {
+                            handleScreenshotFailure(-1)
                         }
                     }
-                )
-            } else {
-                android.util.Log.e("Nupe", "Screenshot not supported on this Android version")
-            }
+
+                    override fun onFailure(errorCode: Int) {
+                        android.util.Log.e("Nupe", "Screenshot failed with error code: $errorCode")
+                        backgroundExecutor.shutdown()
+                        handleScreenshotFailure(errorCode)
+                    }
+                }
+            )
+        } else {
+            android.util.Log.e("Nupe", "Screenshot not supported on this Android version")
         }
     }
 
@@ -252,46 +294,72 @@ class NupeAccessibilityService : AccessibilityService() {
     }
 
     private fun processBitmap(bitmap: android.graphics.Bitmap) {
-        scope.launch {
-            // 2. Parallel Analysis (OCR + Visual)
-            // Use async to run them concurrently on the background thread
-            val ocrDeferred = async { 
-                try {
-                    ocrAnalyzer.analyze(bitmap) 
-                } catch(e: Exception) { 
-                    false 
-                }
-            }
-            
-            val visualDeferred = async {
-                try {
-                    val score = imageAnalyzer.analyzeImage(bitmap)
-                    score > 0.5f // Threshold for porn (0.0 - 1.0)
-                } catch(e: Exception) {
-                    false
-                }
-            }
+        // HEARTBEAT: Log bitmap processing
+        android.util.Log.d("Nupe", "Processing Bitmap: ${bitmap.width}x${bitmap.height}")
 
-            // 3. Smart Short-circuit & Split Logic
-            val isTextPorn = ocrDeferred.await()
-            val isVisualPorn = visualDeferred.await()
+        // CRITICAL PERFORMANCE FIX: Set flag before launching coroutine
+        isAnalyzing = true
 
-            if (isVisualPorn) {
-                // CRITICAL: Only Visual Nudity triggers the Nuclear Option (Block)
-                android.util.Log.d("Nupe", "Visual Porn Detected! Blocking.")
-                triggerBlock()
-            } else if (isTextPorn) {
-                // OCR text is treated just like typed text -> Warning only
-                // This prevents the "Typing 'porn' leads to Block" bug
-                android.util.Log.d("Nupe", "OCR found bad text. Showing Warning.")
-                withContext(Dispatchers.Main) {
-                     overlayManager.showBubble(this@NupeAccessibilityService)
-                     riskManager.incrementRisk()
+        // CRITICAL PERFORMANCE FIX: Ensure execution on Dispatchers.Default (Background)
+        scope.launch(Dispatchers.Default) {
+            try {
+                android.util.Log.d("Nupe", "Starting parallel image analysis...")
+                val startTime = System.currentTimeMillis()
+
+                // 2. PARALLEL Analysis (OCR + Visual) - Run concurrently, not sequentially!
+                val ocrDeferred = async(Dispatchers.Default) {
+                    try {
+                        ocrAnalyzer.analyze(bitmap)
+                    } catch(e: Exception) {
+                        android.util.Log.e("Nupe", "OCR analysis failed", e)
+                        false
+                    }
                 }
-                // DO NOT call triggerBlock() here.
+
+                val visualDeferred = async(Dispatchers.Default) {
+                    try {
+                        imageAnalyzer.analyze(bitmap) // OBJECTIVE 3: Use new analyze() method
+                    } catch(e: Exception) {
+                        android.util.Log.e("Nupe", "Visual analysis failed", e)
+                        com.example.nupe.data.ml.AnalysisResult(false, false, 0f)
+                    }
+                }
+
+                // 3. Smart Short-circuit & Split Logic
+                val isTextPorn = ocrDeferred.await()
+                val visualResult = visualDeferred.await()
+
+                val duration = System.currentTimeMillis() - startTime
+                android.util.Log.d("Nupe", "Analysis completed in ${duration}ms")
+
+                // OBJECTIVE 3: Handle hardcore, softcore, and text separately
+                if (visualResult.isHardcore) {
+                    // CRITICAL: Only Visual Hardcore Nudity triggers the Nuclear Option (Block + Back)
+                    android.util.Log.d("Nupe", "Hardcore Visual Porn Detected! Blocking.")
+                    triggerBlock()
+                } else if (visualResult.isSoftcore) {
+                    // OBJECTIVE 3: Softcore (Sexy/Bikini) -> Send System Notification only
+                    android.util.Log.d("Nupe", "Softcore/Suggestive Content Detected. Sending notification.")
+                    withContext(Dispatchers.Main) {
+                        notificationHelper.showSuggestiveContentNotification()
+                    }
+                    // DO NOT block or show bubble
+                } else if (isTextPorn) {
+                    // OCR text is treated just like typed text -> Warning only
+                    // This prevents the "Typing 'porn' leads to Block" bug
+                    android.util.Log.d("Nupe", "OCR found bad text. Showing Warning.")
+                    withContext(Dispatchers.Main) {
+                         overlayManager.showBubble(this@NupeAccessibilityService)
+                         riskManager.incrementRisk()
+                    }
+                    // DO NOT call triggerBlock() here.
+                }
+            } finally {
+                // CRITICAL PERFORMANCE FIX: Always clear flag in finally block
+                bitmap.recycle()
+                isAnalyzing = false
+                android.util.Log.d("Nupe", "Analysis complete, ready for next frame")
             }
-            
-            bitmap.recycle()
         }
     }
 
@@ -312,10 +380,18 @@ class NupeAccessibilityService : AccessibilityService() {
     
     override fun onDestroy() {
         super.onDestroy()
-        scope.cancel()
+        // CRITICAL FIX: Cancel all coroutines with proper cleanup
+        serviceJob.cancel()
+        overlayManager.hideBubble()
+        overlayManager.hideBlock()
+        overlayManager.hideBlur()
+        riskManager.cleanup() // Clean up RiskManager's coroutines
+        android.util.Log.d("Nupe", "Service destroyed, all resources cleaned up")
     }
 
     override fun onInterrupt() {
-        // Handle interruption
+        // Handle interruption - clean up overlays
+        overlayManager.hideBubble()
+        overlayManager.hideBlock()
     }
 }

@@ -3,6 +3,7 @@ package com.example.nupe.domain.manager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,7 +23,9 @@ class RiskEscalationManager @Inject constructor() {
 
     private var riskScore = 0
     private var decayJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.Default)
+    // CRITICAL FIX: Use managed Job for proper lifecycle control
+    private val managerJob = SupervisorJob()
+    private val scope = CoroutineScope(managerJob + Dispatchers.Default)
 
     /**
      * Called when suspicious text/content is detected.
@@ -68,6 +71,16 @@ class RiskEscalationManager @Inject constructor() {
         decayJob?.cancel()
         android.util.Log.d("NupeRisk", "Risk Score Reset to 0 (Safe Zone)")
     }
-    
+
     fun getCurrentScore() = riskScore
+
+    /**
+     * CRITICAL FIX: Call this when the service is destroyed to clean up coroutines
+     */
+    fun cleanup() {
+        decayJob?.cancel()
+        managerJob.cancel()
+        riskScore = 0
+        android.util.Log.d("NupeRisk", "RiskEscalationManager cleaned up")
+    }
 }
