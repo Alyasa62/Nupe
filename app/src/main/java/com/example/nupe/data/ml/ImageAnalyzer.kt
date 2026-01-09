@@ -35,7 +35,11 @@ class ImageAnalyzer @Inject constructor(
     private val inputImageWidth = 224
     private val inputImageHeight = 224
     // Float32 requires 4 bytes per channel
-    private val modelInputSize = inputImageWidth * inputImageHeight * 3 * 4 
+    private val modelInputSize = inputImageWidth * inputImageHeight * 3 * 4
+
+    // Public property to check if analyzer is ready
+    val isReady: Boolean
+        get() = interpreter != null
 
     init {
         initializeInterpreter()
@@ -45,27 +49,34 @@ class ImageAnalyzer @Inject constructor(
         try {
             val modelBuffer = loadModelFile(CoreConstants.MODEL_FILENAME)
 
-            // CRITICAL PERFORMANCE FIX: Try hardware acceleration first, fallback to CPU
+            // CRITICAL CRASH FIX: Try hardware acceleration with robust fallback to CPU
             val options = Interpreter.Options().apply {
                 setNumThreads(4) // Use 4 threads for CPU fallback
 
                 // Try GPU delegate first (most compatible with float models)
                 var hardwareAccelEnabled = false
 
-                // CRITICAL FIX: Check device compatibility before using GPU delegate
-                val compatibilityList = CompatibilityList()
-                if (compatibilityList.isDelegateSupportedOnThisDevice) {
-                    try {
-                        // Use default GPU delegate options for maximum compatibility
-                        val gpuDelegate = GpuDelegate()
-                        addDelegate(gpuDelegate)
-                        android.util.Log.d("Nupe", "GPU delegate enabled for hardware acceleration")
-                        hardwareAccelEnabled = true
-                    } catch (e: Exception) {
-                        android.util.Log.w("Nupe", "GPU delegate initialization failed: ${e.message}")
+                // CRITICAL FIX: Wrap GPU initialization in try-catch to prevent NoClassDefFoundError crash
+                try {
+                    // Check device compatibility before using GPU delegate
+                    val compatibilityList = CompatibilityList()
+                    if (compatibilityList.isDelegateSupportedOnThisDevice) {
+                        try {
+                            // Use default GPU delegate options for maximum compatibility
+                            val gpuDelegate = GpuDelegate()
+                            addDelegate(gpuDelegate)
+                            android.util.Log.d("Nupe", "GPU delegate enabled for hardware acceleration")
+                            hardwareAccelEnabled = true
+                        } catch (e: Exception) {
+                            android.util.Log.e("Nupe", "GPU Delegate failed, falling back to CPU", e)
+                        }
+                    } else {
+                        android.util.Log.d("Nupe", "GPU delegate not supported on this device")
                     }
-                } else {
-                    android.util.Log.d("Nupe", "GPU delegate not supported on this device")
+                } catch (e: NoClassDefFoundError) {
+                    android.util.Log.e("Nupe", "GPU Delegate classes not found (missing library), falling back to CPU", e)
+                } catch (e: Exception) {
+                    android.util.Log.e("Nupe", "GPU Delegate initialization error, falling back to CPU", e)
                 }
 
                 // If GPU failed, try NNAPI (Neural Network API) delegate

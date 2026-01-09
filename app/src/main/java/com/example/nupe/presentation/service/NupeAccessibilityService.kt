@@ -212,6 +212,14 @@ class NupeAccessibilityService : AccessibilityService() {
         // HEARTBEAT: Log image analysis trigger
         android.util.Log.d("Nupe", "Triggering Image Analysis...")
 
+        // CRITICAL FIX: Check if analyzer is ready
+        android.util.Log.d("Nupe", "Analyzer Status: ${if (imageAnalyzer.isReady) "Ready" else "Not Ready"}")
+
+        if (!imageAnalyzer.isReady) {
+            android.util.Log.e("Nupe", "ImageAnalyzer not initialized. Skipping analysis.")
+            return
+        }
+
         // CRITICAL PERFORMANCE FIX: Drop frame if already analyzing
         if (isAnalyzing) {
             android.util.Log.d("Nupe", "Analysis already in progress, dropping frame")
@@ -228,6 +236,9 @@ class NupeAccessibilityService : AccessibilityService() {
 
         // Fix: Image Analyzer Logging
         android.util.Log.d("Nupe", "Attempting Screenshot...")
+
+        // CRITICAL FIX: Set analyzing flag before screenshot to prevent concurrent analysis
+        isAnalyzing = true
 
         // 1. Capture Bitmap (Android 11+ API) with Callback
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
@@ -261,6 +272,8 @@ class NupeAccessibilityService : AccessibilityService() {
                         if (bitmap != null) {
                             processBitmap(bitmap)
                         } else {
+                            // CRITICAL FIX: Reset analyzing flag on bitmap conversion failure
+                            isAnalyzing = false
                             handleScreenshotFailure(-1)
                         }
                     }
@@ -268,12 +281,16 @@ class NupeAccessibilityService : AccessibilityService() {
                     override fun onFailure(errorCode: Int) {
                         android.util.Log.e("Nupe", "Screenshot failed with error code: $errorCode")
                         backgroundExecutor.shutdown()
+                        // CRITICAL FIX: Reset analyzing flag on screenshot failure
+                        isAnalyzing = false
                         handleScreenshotFailure(errorCode)
                     }
                 }
             )
         } else {
             android.util.Log.e("Nupe", "Screenshot not supported on this Android version")
+            // CRITICAL FIX: Reset analyzing flag when screenshot API not available
+            isAnalyzing = false
         }
     }
 
@@ -297,8 +314,7 @@ class NupeAccessibilityService : AccessibilityService() {
         // HEARTBEAT: Log bitmap processing
         android.util.Log.d("Nupe", "Processing Bitmap: ${bitmap.width}x${bitmap.height}")
 
-        // CRITICAL PERFORMANCE FIX: Set flag before launching coroutine
-        isAnalyzing = true
+        // Note: isAnalyzing flag already set in triggerImageAnalysis()
 
         // CRITICAL PERFORMANCE FIX: Ensure execution on Dispatchers.Default (Background)
         scope.launch(Dispatchers.Default) {

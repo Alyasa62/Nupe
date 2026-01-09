@@ -67,6 +67,7 @@ dependencies {
     implementation(libs.tensorflow.lite)
     implementation(libs.tensorflow.lite.support)
     implementation(libs.tensorflow.lite.gpu)
+    implementation(libs.tensorflow.lite.gpu.api)
     implementation(libs.tensorflow.lite.gpu.delegate.plugin)
 
     testImplementation(libs.junit)
