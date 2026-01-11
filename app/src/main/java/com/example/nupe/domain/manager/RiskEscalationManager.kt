@@ -27,9 +27,7 @@ class RiskEscalationManager @Inject constructor() {
     private val managerJob = SupervisorJob()
     private val scope = CoroutineScope(managerJob + Dispatchers.Default)
 
-    /**
-     * Called when suspicious text/content is detected.
-     */
+
     fun onSuspiciousEvent() {
         riskScore++
         resetDecayTimer()
