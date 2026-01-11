@@ -1,17 +1,31 @@
 package com.example.nupe.presentation.overlay
 
 import android.content.Context
+import android.graphics.Color as AndroidColor
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.launch
 import androidx.lifecycle.setViewTreeLifecycleOwner
 
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
@@ -33,7 +47,7 @@ class OverlayManager @Inject constructor(
 ) : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
 
     // CRITICAL FIX: Store WindowManager references per view to ensure consistency
-    private var bubbleView: ComposeView? = null
+    private var bubbleView: View? = null
     private var blockView: ComposeView? = null
     private var blurView: ComposeView? = null
 
@@ -66,60 +80,84 @@ class OverlayManager @Inject constructor(
      * @param context MUST be the AccessibilityService context.
      */
     fun showBubble(context: Context) {
-        if (isBubbleAttached || bubbleView != null) return // Already showing
+        // FORCE UI VISIBILITY: Run on Main Thread
+        MainScope().launch(Dispatchers.Main) {
+            if (isBubbleAttached || bubbleView != null) return@launch // Already showing
 
-        // CRITICAL FIX: Use specific pixel values instead of WRAP_CONTENT
-        // ComposeView defaults to size 0 without explicit measurement
-        val bubbleSize = 200 // 200px to fit 72dp bubble (roughly 72dp * 2.75 density)
-        val params = WindowManager.LayoutParams(
-            bubbleSize, // Fixed width in pixels
-            bubbleSize, // Fixed height in pixels
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            // Flags: Don't take focus, allow outside touches, layout in screen
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.END
-            alpha = 1.0f // Ensure full opacity
-        }
+            // FORCE UI: Fixed 200px size (not wrap_content)
+            val params = WindowManager.LayoutParams(
+                200, // Fixed width in pixels
+                200, // Fixed height in pixels
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                // Flags: Don't take focus, allow touches to pass through
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or // Allow touches to pass through!
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                // FORCE UI: Top-left corner is safest
+                gravity = Gravity.TOP or Gravity.START
+                y = 200 // Push down to avoid status bar
+                x = 0
 
-        // Fix: Use the Service Context to create the view
-        bubbleView = ComposeView(context).apply {
-            setViewTreeLifecycleOwner(this@OverlayManager)
-            setViewTreeViewModelStoreOwner(this@OverlayManager)
-            setViewTreeSavedStateRegistryOwner(this@OverlayManager)
-            // CRITICAL FIX: Explicitly set visibility
-            visibility = android.view.View.VISIBLE
-            setContent {
-                // Wrap in Box with explicit size to ensure rendering
-                androidx.compose.foundation.layout.Box(
-                    modifier = androidx.compose.ui.Modifier
-                        .size(72.dp)
-                        .background(androidx.compose.ui.graphics.Color.Transparent),
-                    contentAlignment = androidx.compose.ui.Alignment.Center
-                ) {
-                    BubbleOverlay(onClick = { /* Expand to settings or dismiss */ })
-                }
+                // FORCE Z-ORDER: Ensure window is on top
+                flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
             }
-        }
 
-        try {
-            android.util.Log.d("NupeOverlay", "Attempting to add bubble view to WindowManager")
-            // CRITICAL FIX: Store the WindowManager instance for consistent removal
-            val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-            bubbleWindowManager = wm
-            wm.addView(bubbleView, params)
-            isBubbleAttached = true
-            android.util.Log.d("NupeOverlay", "Bubble view added successfully")
-        } catch (e: Exception) {
-            android.util.Log.e("NupeOverlay", "Error adding bubble view", e)
-            e.printStackTrace()
-            // Clean up if add failed
-            bubbleView = null
-            bubbleWindowManager = null
-            isBubbleAttached = false
+            // FORCE UI: Create NATIVE ANDROID VIEW (not Compose) for guaranteed visibility
+            bubbleView = FrameLayout(context).apply {
+                // FORCE VISIBILITY
+                visibility = View.VISIBLE
+                elevation = 100f
+
+                // CIRCULAR SEMI-TRANSPARENT RED BACKGROUND
+                val circleDrawable = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(AndroidColor.argb(180, 255, 0, 0)) // Semi-transparent red (70% opacity)
+                    setStroke(4, AndroidColor.WHITE) // White border
+                }
+                background = circleDrawable
+
+                // Add white "!" text
+                val textView = TextView(context).apply {
+                    text = "!"
+                    textSize = 40f
+                    setTextColor(AndroidColor.WHITE)
+                    gravity = Gravity.CENTER
+                    layoutParams = FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                }
+                addView(textView)
+
+                // CRITICAL: Force measure and layout BEFORE adding to WindowManager
+                val size = 200
+                measure(
+                    View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.EXACTLY)
+                )
+                layout(0, 0, size, size)
+
+                android.util.Log.d("NupeOverlay", "Created native Android view: ${this.measuredWidth}x${this.measuredHeight}")
+            }
+
+            try {
+                android.util.Log.d("NupeOverlay", "Attempting to add bubble view to WindowManager")
+                val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                bubbleWindowManager = wm
+                wm.addView(bubbleView, params)
+                isBubbleAttached = true
+                android.util.Log.d("NupeOverlay", "Bubble view added successfully")
+            } catch (e: Exception) {
+                android.util.Log.e("NupeOverlay", "Error adding bubble view", e)
+                e.printStackTrace()
+                // Clean up if add failed
+                bubbleView = null
+                bubbleWindowManager = null
+                isBubbleAttached = false
+            }
         }
     }
 

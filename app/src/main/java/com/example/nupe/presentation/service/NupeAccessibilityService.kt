@@ -32,12 +32,10 @@ class NupeAccessibilityService : AccessibilityService() {
     private var isAnalyzing = false
     
     // Feature: Safe Zone Detection (Safe Apps)
+    // CRITICAL FIX: Removed launchers from safe apps - users can search for bad words in launcher!
     private val safeApps = listOf(
         "com.example.nupe",
-        "com.miui.home", 
-        "com.android.launcher3", 
-        "com.google.android.apps.nexuslauncher", 
-        "com.android.systemui", 
+        "com.android.systemui",
         "com.android.settings",
         "com.google.android.dialer",
         "com.android.deskclock"
@@ -51,8 +49,12 @@ class NupeAccessibilityService : AccessibilityService() {
 
         val packageName = event.packageName?.toString() ?: return
 
+        // DEBUG: Log package name
+        android.util.Log.d("Nupe", "Package: $packageName")
+
         // 1. FILTER: Ignore safe apps
         if (CoreConstants.SAFE_PACKAGES.contains(packageName)) {
+            android.util.Log.d("Nupe", "Filtered (SAFE_PACKAGES): $packageName")
             return
         }
         android.util.Log.d("NupeService", "Processing event from: $packageName, type: ${event.eventType}")
