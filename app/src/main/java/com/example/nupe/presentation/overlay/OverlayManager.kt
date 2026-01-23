@@ -84,10 +84,14 @@ class OverlayManager @Inject constructor(
         MainScope().launch(Dispatchers.Main) {
             if (isBubbleAttached || bubbleView != null) return@launch // Already showing
 
-            // FORCE UI: Fixed 200px size (not wrap_content)
+            // FORCE UI: Fixed 100dp size for visibility testing (convert dp to pixels)
+            val displayMetrics = context.resources.displayMetrics
+            val sizeDp = 100
+            val sizePixels = (sizeDp * displayMetrics.density).toInt()
+
             val params = WindowManager.LayoutParams(
-                200, // Fixed width in pixels
-                200, // Fixed height in pixels
+                sizePixels, // Fixed width (100dp converted to pixels)
+                sizePixels, // Fixed height (100dp converted to pixels)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 // Flags: Don't take focus, allow touches to pass through
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -98,7 +102,7 @@ class OverlayManager @Inject constructor(
             ).apply {
                 // FORCE UI: Top-left corner is safest
                 gravity = Gravity.TOP or Gravity.START
-                y = 200 // Push down to avoid status bar
+                y = (100 * displayMetrics.density).toInt() // Push down to avoid status bar (100dp)
                 x = 0
 
                 // FORCE Z-ORDER: Ensure window is on top
@@ -111,10 +115,10 @@ class OverlayManager @Inject constructor(
                 visibility = View.VISIBLE
                 elevation = 100f
 
-                // CIRCULAR SEMI-TRANSPARENT RED BACKGROUND
+                // CIRCULAR FULLY OPAQUE RED BACKGROUND (for testing visibility)
                 val circleDrawable = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
-                    setColor(AndroidColor.argb(180, 255, 0, 0)) // Semi-transparent red (70% opacity)
+                    setColor(AndroidColor.RED) // Fully opaque bright red for visibility testing
                     setStroke(4, AndroidColor.WHITE) // White border
                 }
                 background = circleDrawable
@@ -122,7 +126,7 @@ class OverlayManager @Inject constructor(
                 // Add white "!" text
                 val textView = TextView(context).apply {
                     text = "!"
-                    textSize = 40f
+                    textSize = 48f // Larger text for 100dp bubble
                     setTextColor(AndroidColor.WHITE)
                     gravity = Gravity.CENTER
                     layoutParams = FrameLayout.LayoutParams(
@@ -133,14 +137,13 @@ class OverlayManager @Inject constructor(
                 addView(textView)
 
                 // CRITICAL: Force measure and layout BEFORE adding to WindowManager
-                val size = 200
                 measure(
-                    View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.EXACTLY),
-                    View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.EXACTLY)
+                    View.MeasureSpec.makeMeasureSpec(sizePixels, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(sizePixels, View.MeasureSpec.EXACTLY)
                 )
-                layout(0, 0, size, size)
+                layout(0, 0, sizePixels, sizePixels)
 
-                android.util.Log.d("NupeOverlay", "Created native Android view: ${this.measuredWidth}x${this.measuredHeight}")
+                android.util.Log.d("NupeOverlay", "Created native Android view: ${this.measuredWidth}x${this.measuredHeight} (${sizeDp}dp)")
             }
 
             try {

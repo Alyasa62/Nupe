@@ -147,8 +147,10 @@ class ImageAnalyzer @Inject constructor(
         val totalExplicitScore = hentaiScore + pornScore
 
         // OBJECTIVE 3: Hardcore vs Softcore logic
-        val isHardcore = totalExplicitScore > 0.70f
-        val isSoftcore = (sexyScore > 0.80f) && !isHardcore
+        // Hardcore: Porn + Hentai > 0.75
+        val isHardcore = totalExplicitScore > 0.75f
+        // Softcore: Sexy > 0.80 AND Hardcore < 0.3 (bikini/suggestive but not explicit)
+        val isSoftcore = (sexyScore > 0.80f) && (totalExplicitScore < 0.3f)
 
         android.util.Log.d("Nupe", "Scores - Hentai: $hentaiScore, Porn: $pornScore, Sexy: $sexyScore, Hardcore: $isHardcore, Softcore: $isSoftcore")
 
