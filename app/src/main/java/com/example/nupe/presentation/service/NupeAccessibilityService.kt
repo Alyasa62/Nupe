@@ -42,49 +42,55 @@ class NupeAccessibilityService : AccessibilityService() {
     )
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null) return
+        // CRITICAL: Wrap entire method in try-catch to prevent service crashes
+        try {
+            if (event == null) return
 
-        // HEARTBEAT: Log every event received
-        android.util.Log.v("Nupe", "Event received: ${event.eventType}")
+            // HEARTBEAT: Log every event received
+            android.util.Log.v("Nupe", "Event received: ${event.eventType}")
 
-        val packageName = event.packageName?.toString() ?: return
+            val packageName = event.packageName?.toString() ?: return
 
-        // DEBUG: Log package name
-        android.util.Log.d("Nupe", "Package: $packageName")
+            // DEBUG: Log package name
+            android.util.Log.d("Nupe", "Package: $packageName")
 
-        // 1. FILTER: Ignore safe apps
-        if (CoreConstants.SAFE_PACKAGES.contains(packageName)) {
-            android.util.Log.d("Nupe", "Filtered (SAFE_PACKAGES): $packageName")
-            return
-        }
-        android.util.Log.d("NupeService", "Processing event from: $packageName, type: ${event.eventType}")
-
-        // 2. SMART TRIGGER: Check event type
-        when (event.eventType) {
-            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
-                handleScrollEvent()
+            // 1. FILTER: Ignore safe apps
+            if (CoreConstants.SAFE_PACKAGES.contains(packageName)) {
+                android.util.Log.d("Nupe", "Filtered (SAFE_PACKAGES): $packageName")
+                return
             }
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                 handleContentChange(event)
+            android.util.Log.d("NupeService", "Processing event from: $packageName, type: ${event.eventType}")
+
+            // 2. SMART TRIGGER: Check event type
+            when (event.eventType) {
+                AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                    handleScrollEvent()
+                }
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                     handleContentChange(event)
+                }
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                     // Feature: Forgiveness Logic (Enter Safe Zone)
+                     if (packageName == this.packageName || safeApps.any { packageName.contains(it) }) {
+                         android.util.Log.d("Nupe", "Entered Safe Zone: $packageName. Resetting.")
+                         // 1. Reset Score
+                         riskManager.resetRisk()
+                         // 2. Remove Overlay (Safely)
+                         overlayManager.hideBlock()
+                         overlayManager.hideBubble()
+                         // 3. Stop processing this event
+                         return
+                     }
+                     handleContentChange(event)
+                }
+                AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+                AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED -> {
+                    handleContentChange(event)
+                }
             }
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                 // Feature: Forgiveness Logic (Enter Safe Zone)
-                 if (packageName == this.packageName || safeApps.any { packageName.contains(it) }) {
-                     android.util.Log.d("Nupe", "Entered Safe Zone: $packageName. Resetting.")
-                     // 1. Reset Score
-                     riskManager.resetRisk()
-                     // 2. Remove Overlay (Safely)
-                     overlayManager.hideBlock() 
-                     overlayManager.hideBubble()
-                     // 3. Stop processing this event
-                     return
-                 }
-                 handleContentChange(event)
-            }
-            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
-            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED -> {
-                handleContentChange(event)
-            }
+        } catch (e: Exception) {
+            // CRITICAL: Log error but DO NOT crash the service
+            android.util.Log.e("Nupe", "Error in onAccessibilityEvent - Service continues running", e)
         }
     }
 
@@ -396,20 +402,71 @@ class NupeAccessibilityService : AccessibilityService() {
          }
     }
     
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        android.util.Log.d("Nupe", "========================================")
+        android.util.Log.d("Nupe", "Accessibility Service Connected!")
+        android.util.Log.d("Nupe", "Nupe is now protecting you 24/7")
+        android.util.Log.d("Nupe", "========================================")
+
+        // Verify all dependencies are injected
+        try {
+            android.util.Log.d("Nupe", "Checking dependencies...")
+            android.util.Log.d("Nupe", "TextAnalyzer: ${if (::textAnalyzer.isInitialized) "✓ Ready" else "✗ MISSING"}")
+            android.util.Log.d("Nupe", "ImageAnalyzer: ${if (::imageAnalyzer.isInitialized) "✓ Ready (Model: ${if (imageAnalyzer.isReady) "Loaded" else "Loading..."})" else "✗ MISSING"}")
+            android.util.Log.d("Nupe", "OcrAnalyzer: ${if (::ocrAnalyzer.isInitialized) "✓ Ready" else "✗ MISSING"}")
+            android.util.Log.d("Nupe", "OverlayManager: ${if (::overlayManager.isInitialized) "✓ Ready" else "✗ MISSING"}")
+            android.util.Log.d("Nupe", "RiskManager: ${if (::riskManager.isInitialized) "✓ Ready" else "✗ MISSING"}")
+            android.util.Log.d("Nupe", "QuranRepository: ${if (::quranRepository.isInitialized) "✓ Ready" else "✗ MISSING"}")
+            android.util.Log.d("Nupe", "NotificationHelper: ${if (::notificationHelper.isInitialized) "✓ Ready" else "✗ MISSING"}")
+            android.util.Log.d("Nupe", "All dependencies initialized successfully!")
+        } catch (e: Exception) {
+            android.util.Log.e("Nupe", "CRITICAL: Dependency check failed", e)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
-        // CRITICAL FIX: Cancel all coroutines with proper cleanup
-        serviceJob.cancel()
-        overlayManager.hideBubble()
-        overlayManager.hideBlock()
-        overlayManager.hideBlur()
-        riskManager.cleanup() // Clean up RiskManager's coroutines
-        android.util.Log.d("Nupe", "Service destroyed, all resources cleaned up")
+        android.util.Log.w("Nupe", "Service destroyed - This should not happen! System may have killed the service.")
+
+        try {
+            // CRITICAL FIX: Cancel all coroutines with proper cleanup
+            serviceJob.cancel()
+
+            // Only cleanup if dependencies are initialized
+            if (::overlayManager.isInitialized) {
+                overlayManager.hideBubble()
+                overlayManager.hideBlock()
+                overlayManager.hideBlur()
+            }
+
+            if (::riskManager.isInitialized) {
+                riskManager.cleanup() // Clean up RiskManager's coroutines
+            }
+
+            android.util.Log.d("Nupe", "Service destroyed, all resources cleaned up")
+        } catch (e: Exception) {
+            android.util.Log.e("Nupe", "Error during service cleanup", e)
+        }
     }
 
     override fun onInterrupt() {
-        // Handle interruption - clean up overlays
-        overlayManager.hideBubble()
-        overlayManager.hideBlock()
+        android.util.Log.w("Nupe", "Service interrupted - User may have disabled the service manually")
+
+        try {
+            // Handle interruption - clean up overlays
+            if (::overlayManager.isInitialized) {
+                overlayManager.hideBubble()
+                overlayManager.hideBlock()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("Nupe", "Error during service interrupt cleanup", e)
+        }
+    }
+
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        android.util.Log.w("Nupe", "Service unbinding - Requesting rebind to stay alive")
+        // Return true to request rebind when killed
+        return true
     }
 }

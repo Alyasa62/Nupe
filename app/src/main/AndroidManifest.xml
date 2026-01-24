@@ -43,11 +43,18 @@
             android:exported="false"
             android:theme="@style/Theme.Nupe" />
 
+        <activity
+            android:name=".presentation.SetupActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Nupe" />
 
         <service
             android:name=".presentation.service.NupeAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="true">
+            android:enabled="true"
+            android:exported="true"
+            android:directBootAware="true"
+            android:stopWithTask="false">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>

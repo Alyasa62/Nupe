@@ -2,8 +2,11 @@
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeViewTextChanged|typeViewScrolled|typeWindowContentChanged|typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews|flagReportViewIds"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews|flagReportViewIds|flagRequestTouchExplorationMode"
     android:canRetrieveWindowContent="true"
     android:canTakeScreenshot="true"
-    android:description="@string/app_name"
-    android:notificationTimeout="100" />
+    android:canPerformGestures="true"
+    android:canRequestFilterKeyEvents="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:settingsActivity="com.example.nupe.presentation.MainActivity" />

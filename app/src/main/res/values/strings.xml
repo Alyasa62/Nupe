@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Nupe</string>
+    <string name="accessibility_service_description">Nupe Protection Service - Monitors screen content to detect and block explicit material, helping you stay focused and safe. This service must remain active 24/7 to provide continuous protection.</string>
 </resources>
