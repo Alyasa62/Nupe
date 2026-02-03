@@ -15,7 +15,7 @@ enum class RiskLevel {
     SAFE,
     WARNING,
     INTENT, // Trigger Notification
-    MAX_PENALTY // Blur + Block
+    MAX_PENALTY
 }
 
 @Singleton

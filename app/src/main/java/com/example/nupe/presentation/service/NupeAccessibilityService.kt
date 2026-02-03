@@ -324,7 +324,6 @@ class NupeAccessibilityService : AccessibilityService() {
 
         // Note: isAnalyzing flag already set in triggerImageAnalysis()
 
-        // CRITICAL PERFORMANCE FIX: Ensure execution on Dispatchers.Default (Background)
         scope.launch(Dispatchers.Default) {
             try {
                 android.util.Log.d("Nupe", "Starting parallel image analysis...")

@@ -113,11 +113,10 @@ fun SetupScreen(
                 )
             }
 
-            // Middle Section: Visual Placeholder
             // TODO: Replace with actual screenshot images
             ScreenshotPlaceholder(stepNumber)
 
-            // Bottom Section: Action Button & Status
+
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth()
