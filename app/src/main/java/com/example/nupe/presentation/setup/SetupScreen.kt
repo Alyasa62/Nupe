@@ -80,7 +80,6 @@ fun SetupScreen(
                     )
                 }
 
-                // Icon
                 IconContainer(
                     icon = getIconForStep(stepNumber),
                     isGranted = isPermissionGranted,
@@ -89,7 +88,6 @@ fun SetupScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Title
                 Text(
                     text = title,
                     fontSize = 28.sp,
