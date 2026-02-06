@@ -89,9 +89,7 @@ class MainActivity : ComponentActivity() {
         return services.contains(expectedServiceName)
     }
 
-    /**
-     * Check if battery optimization is disabled for this app
-     */
+
     private fun checkBatteryOptimization(context: Context): Boolean {
         return try {
             val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
